@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import nn, optim
 import math
 
 class Encoder(nn.Module):
@@ -121,6 +121,60 @@ class multiviewVAE(nn.Module):
         elbo_loss = -0.5 * ((logp11 + logp21 - kl1) + (logp12 + logp22 - kl2)) 
 
         return elbo_loss, logp11, logp21, logp12, logp22, kl1, kl2
+
+    def train_loop(self, dataloader,  lr=1e-3, epochs = 200):
+        # Optimizer
+        optimizer = optim.Adam(self.parameters(), lr=lr)
+
+        # Stores metrics for plotting
+        history = {"elbo": [], "rec": [], "kl1": [], "kl2": []}
+
+        for epoch in range(epochs):
+            self.train()
+            train_loss = 0
+            train_rec = 0
+            train_kl_1 = 0
+            train_kl_2 = 0
+
+
+            for batch in dataloader:
+                x1, x2 = batch[0], batch[1]
+                optimizer.zero_grad()
+                x11_hat, x21_hat, x12_hat, x22_hat, kl1, kl2 = self.forward((x1, x2))
+
+                elbo_loss, logp11, logp21, logp12, logp22, kl1, kl2 = self.loss_function(x1, x2,x11_hat, x21_hat, x12_hat, x22_hat, kl1, kl2 )
+
+                elbo_loss.backward()
+                optimizer.step()
+
+                train_loss += elbo_loss.item()
+                train_rec += (logp11 + logp21 + logp12 + logp22).item()
+                train_kl_1 += kl1.item()
+                train_kl_2 += kl2.item()
+
+            num_batches = len(dataloader)
+
+            epoch_elbo = train_loss / num_batches
+            epoch_rec = train_rec / num_batches
+            epoch_kl1 = train_kl_1 / num_batches
+            epoch_kl2 = train_kl_2 / num_batches
+
+            history["elbo"].append(epoch_elbo)
+            history["rec"].append(epoch_rec)
+            history["kl1"].append(epoch_kl1)
+            history["kl2"].append(epoch_kl2)
+            
+            ## IN THE FUTURE, IT MAY BE GOOD TO MONITOR LOSSES FROM ALL VIEWS TO SEE IF ONE IS HAVING A BIGGER INFLUENCE
+            print(
+                f"Epoch {epoch + 1} | "
+                f"ELBO loss: {train_loss/num_batches} |"
+                f"Log-Likelihood {train_rec/num_batches} | "
+                f"KL1 {train_kl_1/num_batches} | "
+                f"KL2 {train_kl_2/num_batches} "
+            )
+
+        return history
+
 
 
 # Auxiliary function which evaluates the log-likelihood of an independent Gaussian using given the mean and covariance
