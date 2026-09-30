@@ -175,6 +175,53 @@ class multiviewVAE(nn.Module):
 
         return history
 
+    # Generates new images from a Normal Prior
+    @torch.no_grad()
+    def generation(self, num_imgs=10):
+        self.eval()
+
+        eps = torch.randn(num_imgs, self.encoder1.latent_dim)
+
+        # Decoding z for both datasets
+        mnist_gen = self.decoder1(eps)
+        svhn_gen = self.decoder2(eps)
+
+        return mnist_gen, svhn_gen
+
+    # Encodes an image and reconstructs it
+    @torch.no_grad()
+    def reconstruction(self, x1=None, x2=None):
+        self.eval()
+        x1_rec, x2_rec = None, None
+
+        if x1 is not None:
+            mu1,_,_ = self.encoder1.encode(x1)
+            x1_rec = self.decoder1(mu1)
+
+        if x2 is not None:
+            mu2,_,_ = self.encoder2.encode(x2)
+            x2_rec = self.decoder2(mu2)
+
+        return x1_rec, x2_rec
+
+    # Cross-generation, converts images from one domain to another
+    @torch.no_grad()
+    def cross_generate(self, x1, x2):
+        # x1 must be MNIST type and x2 of SVHN type
+        self.eval()
+        x1_cross, x2_cross = None, None
+
+        if x1 is not None:
+            mu1,_,_ = self.encoder1.encode(x1)
+            x2_cross =  self.decoder2(mu1)
+
+        if x2 is not None:
+            mu2,_,_ = self.encoder2.encode(x2)
+            x1_cross =  self.decoder1(mu2)
+
+        return x1_cross, x2_cross
+
+        
 
 
 # Auxiliary function which evaluates the log-likelihood of an independent Gaussian using given the mean and covariance
