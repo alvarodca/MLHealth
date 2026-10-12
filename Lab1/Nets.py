@@ -122,7 +122,9 @@ class multiviewVAE(nn.Module):
 
         return elbo_loss, logp11, logp21, logp12, logp22, kl1, kl2
 
-    def train_loop(self, dataloader,  lr=1e-3, epochs = 200):
+    def train_loop(self, dataloader,  lr=1e-3, epochs = 200, device="cpu"):
+        self.to(device)
+
         # Optimizer
         optimizer = optim.Adam(self.parameters(), lr=lr)
 
@@ -139,6 +141,8 @@ class multiviewVAE(nn.Module):
 
             for batch in dataloader:
                 x1, x2 = batch[0], batch[1]
+                x1 = x1.to(device)
+                x2 = x2.to(device)
                 optimizer.zero_grad()
                 x11_hat, x21_hat, x12_hat, x22_hat, kl1, kl2 = self.forward((x1, x2))
 
