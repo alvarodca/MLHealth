@@ -3,11 +3,14 @@ from torch import nn, optim
 import torch.nn.functional as F
 import math
 
-# Declares separate Encoder and Decoder for MNIST and SVHN datasets due to their different complexity.
-
-# Same Idea as before, but it has to encode to an additional latent space in order to obtain all its details
 class Encoder(nn.Module):
     def __init__(self, latent_dim, private_dim, conv_stack, linear_stack):
+        """
+        Encoder class. All encoders defined take the vector and project to both a shared latent and a private latent.
+        latent_dim : Dimensions for the shared latent
+        private_dim : Dimensions for the private latent
+        conv_stack: Convolutional NN, declared separately
+        linear_stack: FFNN, declared separately"""
         super().__init__()
         self.latent_dim = latent_dim
         self.private_dim = private_dim
@@ -45,8 +48,14 @@ class Encoder(nn.Module):
 
         return (mu_s, std_s, kl_s), (mu_p, std_p, kl_p)
 
+
 class Decoder(nn.Module):
     def __init__(self, conv_stack, linear_stack, channels, height, width):
+        """
+        Decoder Class. 
+        conv_stack and linear_stack same as before.
+        Channels, height and width for unflattening to arrive at previous dimensions
+        """
         super().__init__()
         self.conv_stack = conv_stack      # registered as submodule -> shows up in .parameters(), gets trained
         self.linear_stack = linear_stack  # same as above
@@ -62,8 +71,12 @@ class Decoder(nn.Module):
 
 class multiviewVAE(nn.Module):
     def __init__(self, encoder1, encoder2, decoder1, decoder2, var_x1, var_x2, private_dim_mnist, private_dim_svhn):
+        """
+        MultiviewVAE.
+        Consists of 2 encoders and 2 decoders. Each encoder encodes into a private and a shared latent.
+        Decoder obtains information from both the shared and the private latent.
+        """
         super().__init__()
-        # Observation variance of p(x|z) (Fixed variance for decoder less training)
         # Large values prioritize KL divergence, small values focus on more sharp visual details
         self.var_x1 = var_x1
         self.var_x2 = var_x2
@@ -81,12 +94,12 @@ class multiviewVAE(nn.Module):
     def forward(self, x):
         x1, x2 = x[0], x[1]
 
-        # Encoidng MNIST
+        # Encoding MNIST
         (mu_s1, std_s1, kl_s1), (mu_p1, std_p1, kl_p1) = self.encoder1.encode(x1)
         z_s1 = self.sample(mu_s1, std_s1)
         z_p1 = self.sample(mu_p1, std_p1) 
 
-        # ENcoding SVHN
+        # Encoding SVHN
         (mu_s2, std_s2, kl_s2), (mu_p2, std_p2, kl_p2) = self.encoder2.encode(x2)
         z_s2 = self.sample(mu_s2, std_s2)
         z_p2 = self.sample(mu_p2, std_p2)   
@@ -128,14 +141,14 @@ class multiviewVAE(nn.Module):
         kl_s2 = kl_s2.sum() / batch_size
         kl_p2 = kl_p2.sum() / batch_size
 
-        # Alignment loss
+        # Alignment loss, makes sure that the shared mean vector is close in value
         align_loss = F.mse_loss(mu_s1, mu_s2, reduction='sum') / x1.size(0)
 
         # Minimizing ELBO loss
         elbo_mnist = logp11 + logp12 - kl_s1 - kl_p1
         elbo_svhn = logp22 + logp21 - kl_s2 - kl_p2
 
-        # MoE, slightly higher for SVHN (more complex)
+        # MoE, value of 0.5. Align loss has a weight of 1.0 
         elbo_loss = -0.5 * (elbo_svhn + elbo_mnist) + align_loss
 
         return elbo_loss, logp11, logp21, logp12, logp22, kl_s1, kl_p1, kl_s2, kl_p2, align_loss
@@ -148,8 +161,10 @@ class multiviewVAE(nn.Module):
 
         # Stores metrics for plotting
         history = {
+            # elbo loss, reconstruction loss and alignment loss
             "elbo": [], "rec": [],"align": [],
-              "kl1": [], "kl2": [],
+            # combined kl terms
+            "kl1": [], "kl2": [],
             # separate KL terms
             "kl_s1": [], "kl_p1": [], "kl_s2": [], "kl_p2": [],
             # shared vs. private totals across views
@@ -169,8 +184,10 @@ class multiviewVAE(nn.Module):
                 x2 = x2.to(device)
                 optimizer.zero_grad()
 
+                # Forward step
                 x11_hat, x21_hat, x12_hat, x22_hat, kl_s1, kl_p1, kl_s2, kl_p2, mu_s1, mu_s2 = self.forward((x1, x2))
 
+                # Loss function and backpropagation
                 elbo_loss, logp11, logp21, logp12, logp22, kl_s1, kl_p1, kl_s2, kl_p2, align_loss   = self.loss_function(
                     x1, x2, x11_hat, x21_hat, x12_hat, x22_hat, kl_s1, kl_p1, kl_s2, kl_p2, mu_s1, mu_s2
                 )
@@ -178,6 +195,7 @@ class multiviewVAE(nn.Module):
                 elbo_loss.backward()
                 optimizer.step()
 
+                # Storing values for plotting
                 sums["elbo"] += elbo_loss.item()
                 sums["rec"] += (logp11 + logp21 + logp12 + logp22).item()
                 sums["align"] += align_loss.item()
@@ -209,7 +227,7 @@ class multiviewVAE(nn.Module):
             f"Align Loss: {history['align'][-1]:.3f} | "
             f"KL shared (s1/s2): {history['kl_s1'][-1]:.3f}/{history['kl_s2'][-1]:.3f} | "
             f"KL private (p1/p2): {history['kl_p1'][-1]:.3f}/{history['kl_p2'][-1]:.3f}"
-        )
+            )
 
         return history
 
@@ -218,11 +236,12 @@ class multiviewVAE(nn.Module):
     def generation(self, num_imgs=10, device="cpu"):
         self.eval()
 
-        # Decoding z for both datasets
+        # Providing a random z vector following the prior
         eps_s = torch.randn(num_imgs, self.encoder1.latent_dim, device=device)
         eps_p1 = torch.randn(num_imgs, self.private_dim_mnist, device=device)
         eps_p2 = torch.randn(num_imgs, self.private_dim_svhn, device=device)
 
+        # Decoding the random vector to generate the images
         mnist_gen = self.decoder1(torch.cat([eps_s, eps_p1], dim=-1))
         svhn_gen = self.decoder2(torch.cat([eps_s, eps_p2], dim=-1))
 
@@ -254,7 +273,8 @@ class multiviewVAE(nn.Module):
         # MNIST to SVHN
         if x1 is not None:
             (mu_s1, _, _), _ = self.encoder1.encode(x1)
-            # With this random from the latent space we are picking a random SVHN background style from the learned prior, to combine it with the digit from the MNIST
+            # With this random from the private latent space we are picking a random SVHN background style from the learned prior, to combine it with the digit from the MNIST
+            # This is because the decoder needs two vectors (one from the shared latent, another from the private latent)
             eps_p2 = torch.randn(x1.size(0), self.private_dim_svhn, device=x1.device)
             x2_cross = self.decoder2(torch.cat([mu_s1, eps_p2], dim=-1))
               
@@ -270,9 +290,8 @@ class multiviewVAE(nn.Module):
 def eval_Gaussian_LL(x, mu_x, var_x):
     x_flat = x.flatten(start_dim = 1)
     mu_flat = mu_x.flatten(start_dim = 1)
-    D = x_flat.shape[1] # 784 for MNIST, 3072 for SVHN
+    D = x_flat.shape[1] # 784 for MNIST, 3072 for SVHN, with this, no normalization is applied as this already gives higher weights to SVHN
 
-    # Mean log-likelihood per dimension (divides the total loss by D, so it is normalized and the gradients from SVHN does not dominate)
     squared_error = torch.sum((x_flat - mu_flat) ** 2, dim=-1)
     # Constant term from GLL
     cnt = D * (math.log(2 * math.pi) + math.log(var_x))
